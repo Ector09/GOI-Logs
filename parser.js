@@ -43,6 +43,11 @@ function sanitizePlayer(name) {
   return result;
 }
 
+function stripTimestampPrefix(line) {
+  if (!line) return '';
+  return String(line).replace(/^\s*(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})\s+/, '');
+}
+
 function parseTimestamp(line) {
   // Attempt to extract a timestamp prefix like: "2025-09-19 23:41:02" or "23:41:02"
   const iso = line.match(/(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})/);
@@ -122,12 +127,13 @@ function parseAdminActor(line) {
 
 function parseConnectDisconnect(line) {
   // Flexible patterns: "Player John connected", "John has been disconnected", "(Connected) John"
+  const stripped = stripTimestampPrefix(line);
   let m =
-    line.match(/^\s*Player\s+(.+?)\s+\(id=.*?\)\s+has\s+connected\.?\s*$/i) ||
-    line.match(/^\s*Player\s+['\"]?(.+?)['\"]?\s+connected\.?\s*$/i) ||
-    line.match(/^\s*['\"]?([^'\"]]+)['\"]?\s+has\s+connected\.?\s*$/i) ||
-    line.match(/\bjoined\s+the\s+game\s*:?\s*['\"]?([^'\"]]+)['\"]?/i) ||
-    line.match(/\bPlayer\s*#\d+\s+(.+?)\s+connected\b/i);
+    stripped.match(/^\s*Player\s+(.+?)\s+\(id=.*?\)\s+has\s+connected\.?\s*$/i) ||
+    stripped.match(/^\s*Player\s+['\"]?(.+?)['\"]?\s+connected\.?\s*$/i) ||
+    stripped.match(/^\s*['\"]?([^'\"]]+)['\"]?\s+has\s+connected\.?\s*$/i) ||
+    stripped.match(/\bjoined\s+the\s+game\s*:?\s*['\"]?([^'\"]]+)['\"]?/i) ||
+    stripped.match(/\bPlayer\s*#\d+\s+(.+?)\s+connected\b/i);
   if (m) {
     return {
       type: EVENT_TYPES.CONNECT,
@@ -139,10 +145,10 @@ function parseConnectDisconnect(line) {
   }
 
   m =
-    line.match(/^\s*Player\s+['\"]?(.+?)['\"]?\s+disconnected\.?\s*$/i) ||
-    line.match(/^\s*['\"]?([^'\"]]+)['\"]?\s+has\s+(?:been\s+)?disconnected\.?\s*$/i) ||
-    line.match(/['\"]?([^'\"]]+)['\"]?\s+left\s+the\s+(?:game|server)\b/i) ||
-    line.match(/\bPlayer\s*#\d+\s+(.+?)\s+disconnected\b/i);
+    stripped.match(/^\s*Player\s+['\"]?(.+?)['\"]?\s+disconnected\.?\s*$/i) ||
+    stripped.match(/^\s*['\"]?([^'\"]]+)['\"]?\s+has\s+(?:been\s+)?disconnected\.?\s*$/i) ||
+    stripped.match(/['\"]?([^'\"]]+)['\"]?\s+left\s+the\s+(?:game|server)\b/i) ||
+    stripped.match(/\bPlayer\s*#\d+\s+(.+?)\s+disconnected\b/i);
   if (m) {
     return {
       type: EVENT_TYPES.DISCONNECT,
@@ -157,10 +163,13 @@ function parseConnectDisconnect(line) {
 
 function parseKillDeath(line) {
   // Kill: "Killer killed Victim with Weapon near Location"
-  let m = line.match(/\b(.+?)\s+killed\s+(.+?)\b/i) || line.match(/\b(.+?)\s+was\s+killed\s+by\s+(.+?)\b/i);
+  const stripped = stripTimestampPrefix(line);
+  let m = stripped.match(/\b(.+?)\s+killed\s+(.+?)\b/i) ||
+    stripped.match(/\b(.+?)\s+was\s+killed\s+by\s+(.+?)\b/i) ||
+    stripped.match(/^\s*([^:]+?)\s+killed\s+by\s+(.+?)\s*$/i);
   if (m) {
     // If pattern is "Victim was killed by Killer", swap
-    const isPassive = /was\\s+killed\\s+by/i.test(line) || /\\bkilled\\s+by\\b/i.test(line);
+    const isPassive = /was\\s+killed\\s+by/i.test(stripped) || /\\bkilled\\s+by\\b/i.test(stripped);
     const a = clean(m[1]);
     const b = clean(m[2]);
     const killer = sanitizePlayer(isPassive ? b : a);
@@ -187,11 +196,11 @@ function parseKillDeath(line) {
   }
 
   // Death (environmental): "Player died", "Player is dead", "suicide"
-  m = line.match(/\b(['\"]?[^'\"]+['\"]?)\s+(?:died|is\s+dead|suicide[d]?|bled\s+out|starv(?:ed|ing)|drown(?:ed|ing))\b/i);
+  m = stripped.match(/\b(['\"]?[^'\"]+['\"]?)\s+(?:died|is\s+dead|suicide[d]?|bled\s+out|starv(?:ed|ing)|drown(?:ed|ing))\b/i);
   if (m) {
     const player = clean(m[1]);
     const location = parseLocation(line);
-    const cause = (line.match(/\bby\s+([A-Za-z]+)/i) || line.match(/\b(?:cause|reason)\s*[:=]\s*([A-Za-z ]+)/i) || [])[1];
+    const cause = (stripped.match(/\bby\s+([A-Za-z]+)/i) || stripped.match(/\b(?:cause|reason)\s*[:=]\s*([A-Za-z ]+)/i) || [])[1];
     const steamId = parseSteamId(line);
     return {
       type: EVENT_TYPES.DEATH,
@@ -208,9 +217,10 @@ function parseChat(line) {
   // Examples:
   // "(Direct) John: hello"
   // "Chat: (Global) John: \"hello\""
-  const m = line.match(/\((Direct|Vehicle|Global|Side|Group|Admin)\)\s+([^:]+):\s+"?(.+?)"?\s*$/i) ||
-            line.match(/\bChat:\s*\(([^)]+)\)\s*([^:]+):\s+"?(.+?)"?\s*$/i) ||
-            line.match(/^\s*Chat:\s*([^:]+):\s*([^:]+):\s+"?(.+?)"?\s*$/i);
+  const stripped = stripTimestampPrefix(line);
+  const m = stripped.match(/\((Direct|Vehicle|Global|Side|Group|Admin)\)\s+([^:]+):\s+"?(.+?)"?\s*$/i) ||
+    stripped.match(/\bChat:\s*\(([^)]+)\)\s*([^:]+):\s+"?(.+?)"?\s*$/i) ||
+    stripped.match(/^\s*Chat:\s*([^:]+):\s*([^:]+):\s+"?(.+?)"?\s*$/i);
   if (m) {
     const channel = clean(m[1]);
     const player = sanitizePlayer(m[2]);
@@ -226,11 +236,12 @@ function parseChat(line) {
 }
 
 function parseBattlEye(line) {
-  if (!/BattlEye Server:/i.test(line)) return null;
+  const stripped = stripTimestampPrefix(line);
+  if (!/BattlEye Server:/i.test(stripped)) return null;
   const steamId = parseSteamId(line);
   const ip = parseIpPort(line);
   // Connect/Disconnect
-  let m = line.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+connected/i);
+  let m = stripped.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+connected/i);
   if (m) {
     return {
       type: EVENT_TYPES.CONNECT,
@@ -240,7 +251,7 @@ function parseBattlEye(line) {
       ip
     };
   }
-  m = line.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+disconnected/i);
+  m = stripped.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+disconnected/i);
   if (m) {
     return {
       type: EVENT_TYPES.DISCONNECT,
@@ -251,7 +262,7 @@ function parseBattlEye(line) {
     };
   }
   // Kick/Ban with reason
-  m = line.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+(?:was\s+)?kicked:?\s*\(?([^)]*)\)?/i);
+  m = stripped.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+(?:was\s+)?kicked:?\s*\(?([^)]*)\)?/i);
   if (m) {
     return {
       type: EVENT_TYPES.ADMIN,
@@ -264,7 +275,7 @@ function parseBattlEye(line) {
       ip
     };
   }
-  m = line.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+(?:has\s+been\s+)?banned:?\s*\(?([^)]*)\)?/i);
+  m = stripped.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+(?:has\s+been\s+)?banned:?\s*\(?([^)]*)\)?/i);
   if (m) {
     return {
       type: EVENT_TYPES.ADMIN,
@@ -278,7 +289,7 @@ function parseBattlEye(line) {
     };
   }
   // High ping or BE-related kick reasons
-  m = line.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+was\s+kicked\s+for\s+(.+)/i);
+  m = stripped.match(/BattlEye Server:\s*Player\s*#\d+\s+(.+?)\s+was\s+kicked\s+for\s+(.+)/i);
   if (m) {
     return {
       type: EVENT_TYPES.ADMIN,
@@ -296,14 +307,15 @@ function parseBattlEye(line) {
 
 function parsePosition(line) {
   // Examples: "John was spotted at 1363.5, 9658.0" or "Player John at 2001.4, 9393.6"
-  let m = line.match(/\b(.+?)\s+was\s+spotted\s+at\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-?\d+(?:\.\d+)?))?/i);
+  const stripped = stripTimestampPrefix(line);
+  let m = stripped.match(/\b(.+?)\s+was\s+spotted\s+at\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-?\d+(?:\.\d+)?))?/i);
   if (m) {
     const player = sanitizePlayer(m[1]);
     const coords = [m[2], m[3], m[4]].filter(Boolean).join(', ');
     return { type: EVENT_TYPES.POSITION, player, coords };
   }
 
-  m = line.match(/\bPlayer\s+['\"]?(.+?)['\"]?\s+(?:is\s+)?at\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-?\d+(?:\.\d+)?))?/i);
+  m = stripped.match(/\bPlayer\s+['\"]?(.+?)['\"]?\s+(?:is\s+)?at\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-?\d+(?:\.\d+)?))?/i);
   if (m) {
     const player = sanitizePlayer(m[1]);
     const coords = [m[2], m[3], m[4]].filter(Boolean).join(', ');
@@ -342,7 +354,8 @@ function parseScriptPosition(line) {
 }
 
 function parsePlayerCount(line) {
-  const m = line.match(/Total Players\s*:\s*(\d+)/i) || line.match(/Players Online\s*[:=]\s*(\d+)/i);
+  const stripped = stripTimestampPrefix(line);
+  const m = stripped.match(/Total Players\s*:\s*(\d+)/i) || stripped.match(/Players Online\s*[:=]\s*(\d+)/i);
   if (!m) return null;
   return {
     type: EVENT_TYPES.PLAYER_COUNT,
@@ -351,7 +364,8 @@ function parsePlayerCount(line) {
 }
 
 function parsePlayerListHeader(line) {
-  const m = line.match(/Latest Admin Player List\s*-\s*([^\-]+?)\s*-\s*Part\s*(\d+)/i);
+  const stripped = stripTimestampPrefix(line);
+  const m = stripped.match(/Latest Admin Player List\s*-\s*([^\-]+?)\s*-\s*Part\s*(\d+)/i);
   if (!m) return null;
   return {
     type: EVENT_TYPES.PLAYER_LIST_HEADER,
@@ -362,12 +376,13 @@ function parsePlayerListHeader(line) {
 
 function parseAdmin(line) {
   // Admin events: kick, ban, restart, shutdown, rcon actions
-  let m = line.match(/\b(kick(?:ed)?|ban(?:ned)?|restart(?:ed)?|shutdown|restarting|stopping|start(?:ed)?)\b/i);
+  const stripped = stripTimestampPrefix(line);
+  let m = stripped.match(/\b(kick(?:ed)?|ban(?:ned)?|restart(?:ed)?|shutdown|restarting|stopping|start(?:ed)?)\b/i);
   if (m) {
     const action = m[1].toLowerCase();
     // Try to grab target player if present
-    const target = (line.match(/\bplayer\s+['\"]?([^'\"]]+)['\"]?/i) || line.match(/\b(['\"]?[^'\"]+['\"]?)\s+kick(?:ed)?\b/i) || [])[1];
-    const reason = (line.match(/\breason\s*[:=]\s*([^;]+)\b/i) || [])[1];
+    const target = (stripped.match(/\bplayer\s+['\"]?([^'\"]]+)['\"]?/i) || stripped.match(/\b(['\"]?[^'\"]+['\"]?)\s+kick(?:ed)?\b/i) || [])[1];
+    const reason = (stripped.match(/\breason\s*[:=]\s*([^;]+)\b/i) || [])[1];
     return {
       type: EVENT_TYPES.ADMIN,
       action,

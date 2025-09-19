@@ -2,6 +2,8 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const ftp = require('basic-ftp');
+const crypto = require('crypto');
+const { PassThrough } = require('stream');
 const { Client, GatewayIntentBits, EmbedBuilder, Events } = require('discord.js');
 const { parseLine, EVENT_TYPES } = require('./parser');
 
@@ -20,6 +22,10 @@ const FILE_PATTERNS = (process.env.FILE_PATTERNS || 'adminLog.xml,latest.log,*.r
 const DRY_RUN = String(process.env.DRY_RUN || 'false').toLowerCase() === 'true';
 const DEBUG = String(process.env.DEBUG || 'false').toLowerCase() === 'true';
 const INCLUDE_IP = String(process.env.INCLUDE_IP || 'false').toLowerCase() === 'true';
+const WHITELIST_FILES = (process.env.WHITELIST_FILES || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
 
 // State persistence to survive restarts
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -39,9 +45,10 @@ function loadState() {
     if (typeof data.bootstrapped !== 'boolean') {
       data.bootstrapped = Object.keys(data.files).length > 0;
     }
+    if (!data.whitelists) data.whitelists = {};
     return data;
   } catch (_) {
-    return { files: {}, bootstrapped: false };
+    return { files: {}, whitelists: {}, bootstrapped: false };
   }
 }
 
@@ -80,15 +87,13 @@ async function listLogFiles(client) {
 
 async function downloadNewChunk(client, remotePath, fromOffset) {
   // Download from offset to end into a buffer
-  let buf = Buffer.alloc(0);
-  const writable = new (require('stream').Writable)({
-    write(chunk, enc, cb) {
-      buf = Buffer.concat([buf, chunk]);
-      cb();
-    }
+  let buf = '';
+  const stream = new PassThrough();
+  stream.on('data', chunk => {
+    buf += chunk.toString('utf8');
   });
-  await client.downloadTo(writable, remotePath, fromOffset);
-  return buf.toString('utf8');
+  await client.downloadTo(stream, remotePath, fromOffset);
+  return buf;
 }
 
 function pretty(text) {
@@ -97,9 +102,7 @@ function pretty(text) {
     .replace(/_/g, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
-  if (!value) return undefined;
-  const lower = value.toLowerCase();
-  return lower.charAt(0).toUpperCase() + lower.slice(1);
+  return value || undefined;
 }
 
 function toEmbed(evt) {
@@ -110,39 +113,36 @@ function toEmbed(evt) {
 
   switch (evt.type) {
     case EVENT_TYPES.CONNECT:
-      embed.setTitle('➡️ Connessione giocatore');
-      embed.setDescription((evt.player || 'Sconosciuto') + " si e' connesso al server");
+      embed.setTitle('Connessione giocatore');
+      embed.setDescription(`${evt.player || 'Sconosciuto'} si e' connesso al server`);
       if (evt.steamId) embed.addFields({ name: 'SteamID', value: String(evt.steamId), inline: true });
       if (evt.guid) embed.addFields({ name: 'GUID', value: evt.guid, inline: true });
       if (INCLUDE_IP && evt.ip) embed.addFields({ name: 'IP', value: evt.ip, inline: true });
       if (evt.source) embed.addFields({ name: 'Fonte', value: evt.source, inline: true });
       break;
     case EVENT_TYPES.DISCONNECT:
-      embed.setTitle('⬅️ Disconnessione giocatore');
-      embed.setDescription((evt.player || 'Sconosciuto') + ' ha lasciato il server');
+      embed.setTitle('Disconnessione giocatore');
+      embed.setDescription(`${evt.player || 'Sconosciuto'} ha lasciato il server`);
       if (evt.steamId) embed.addFields({ name: 'SteamID', value: String(evt.steamId), inline: true });
       if (evt.guid) embed.addFields({ name: 'GUID', value: evt.guid, inline: true });
       if (INCLUDE_IP && evt.ip) embed.addFields({ name: 'IP', value: evt.ip, inline: true });
       if (evt.source) embed.addFields({ name: 'Fonte', value: evt.source, inline: true });
       break;
     case EVENT_TYPES.KILL:
-      embed.setTitle('💥 Uccisione');
-      embed.setDescription('💥 ' + (evt.killer || 'Sconosciuto') + ' ha ucciso ' + (evt.victim || 'Sconosciuto'));
-      if (evt.weapon) embed.addFields({ name: 'Arma', value: pretty(evt.weapon), inline: true });
+      embed.setTitle('Uccisione');
+      embed.setDescription(`${evt.killer || 'Sconosciuto'} ha ucciso ${evt.victim || 'Sconosciuto'}`);
+      if (evt.weapon) embed.addFields({ name: 'Arma', value: evt.weapon || 'N/D', inline: true });
       if (evt.location) embed.addFields({ name: 'Luogo', value: pretty(evt.location) || evt.location, inline: true });
-      if (evt.distance != null) embed.addFields({ name: 'Distanza', value: String(evt.distance) + ' m', inline: true });
+      if (evt.distance != null) embed.addFields({ name: 'Distanza', value: `${evt.distance} m`, inline: true });
       if (evt.hitZone) embed.addFields({ name: 'Colpo', value: pretty(evt.hitZone), inline: true });
       break;
     case EVENT_TYPES.DEATH:
-      embed.setTitle('☠️ Morte giocatore');
-      {
-        const cause = pretty(evt.cause) || 'causa sconosciuta';
-        embed.setDescription('☠️ ' + (evt.player || 'Sconosciuto') + " e' stato ucciso da " + cause);
-      }
+      embed.setTitle('Morte giocatore');
+      embed.setDescription(`${evt.player || 'Sconosciuto'} e' morto${evt.cause ? ' per ' + pretty(evt.cause) : ''}`);
       if (evt.location) embed.addFields({ name: 'Luogo', value: pretty(evt.location) || evt.location, inline: true });
       break;
     case EVENT_TYPES.CHAT:
-      embed.setTitle('🗨️ Chat in game');
+      embed.setTitle('Chat in game');
       embed.addFields(
         { name: 'Canale', value: evt.channel || 'N/D', inline: true },
         { name: 'Player', value: evt.player || 'Sconosciuto', inline: true },
@@ -150,12 +150,12 @@ function toEmbed(evt) {
       );
       break;
     case EVENT_TYPES.ADMIN:
-      embed.setTitle('⚡ Evento admin');
+      embed.setTitle('Evento admin');
       {
         const actor = evt.actor || evt.source || 'Admin';
         const action = evt.action || 'azione';
         const targetInfo = evt.target ? ' su ' + evt.target : '';
-        embed.setDescription('⚡ ' + actor + ' ha eseguito ' + action + targetInfo);
+        embed.setDescription(`${actor} ha eseguito ${action}${targetInfo}`);
       }
       if (evt.reason) embed.addFields({ name: 'Motivo', value: pretty(evt.reason) });
       if (evt.source && evt.actor !== evt.source) {
@@ -163,22 +163,33 @@ function toEmbed(evt) {
       }
       break;
     case EVENT_TYPES.POSITION:
-      embed.setTitle('📍 Posizione giocatore');
+      embed.setTitle('Posizione giocatore');
       embed.addFields(
         { name: 'Player', value: evt.player || 'Sconosciuto', inline: true },
         { name: 'Coordinate', value: evt.coords || evt.location || 'N/D', inline: true }
       );
       break;
     case EVENT_TYPES.PLAYER_COUNT:
-      embed.setTitle('👥 Giocatori online');
-      embed.setDescription('👥 Totale: ' + (evt.count != null ? String(evt.count) : 'N/D'));
+      embed.setTitle('Giocatori online');
+      embed.setDescription(`Totale: ${evt.count != null ? String(evt.count) : 'N/D'}`);
       break;
     case EVENT_TYPES.PLAYER_LIST_HEADER:
-      embed.setTitle('🗺️ Snapshot giocatori');
+      embed.setTitle('Snapshot giocatori');
       embed.addFields(
         { name: 'Orario log', value: evt.snapshot || 'N/D', inline: true },
         { name: 'Parte', value: String(evt.part || 1), inline: true }
       );
+      break;
+    case EVENT_TYPES.WHITELIST_UPDATE:
+      embed.setTitle('Aggiornamento whitelist');
+      embed.addFields({ name: 'File', value: evt.file || 'N/D', inline: true });
+      embed.addFields({ name: 'Totale', value: String(evt.total ?? 0), inline: true });
+      if (evt.added && evt.added.length) {
+        embed.addFields({ name: 'Aggiunti', value: formatWhitelistList(evt.added), inline: false });
+      }
+      if (evt.removed && evt.removed.length) {
+        embed.addFields({ name: 'Rimossi', value: formatWhitelistList(evt.removed), inline: false });
+      }
       break;
     default:
       embed.setTitle('Evento');
@@ -192,6 +203,85 @@ function chunkToLines(chunk) {
   // Normalize newlines and trim trailing empty
   const lines = chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   return lines.filter(l => l && l.trim().length > 0);
+}
+
+function parseWhitelistEntries(content) {
+  return String(content)
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'));
+}
+
+function hashContent(content) {
+  return crypto.createHash('sha1').update(String(content), 'utf8').digest('hex');
+}
+
+function formatWhitelistList(items) {
+  if (!items || !items.length) return 'Nessuno';
+  const MAX = 10;
+  const slice = items.slice(0, MAX).join('\n');
+  if (items.length > MAX) {
+    return `${slice}\n… e altri ${items.length - MAX}`;
+  }
+  return slice;
+}
+
+async function processWhitelistFiles(client) {
+  const events = [];
+  for (const rel of WHITELIST_FILES) {
+    if (!rel) continue;
+    const remoteRel = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+    let buffer = '';
+    const stream = new PassThrough();
+    stream.on('data', chunk => {
+      buffer += chunk.toString('utf8');
+    });
+    try {
+      await client.downloadTo(stream, remoteRel);
+    } catch (err) {
+      console.error(`[Whitelist] Download failed for ${remoteRel}:`, err.message);
+      continue;
+    }
+
+    const key = path.posix.join(FTP_PATH.replace(/\\/g, '/'), remoteRel);
+    const entries = parseWhitelistEntries(buffer);
+    const hash = hashContent(buffer);
+    const prev = state.whitelists[key];
+
+    if (!prev) {
+      state.whitelists[key] = { hash, entries, updatedAt: Date.now() };
+      saveState();
+      if (DEBUG) {
+        console.log(`[DEBUG] Whitelist ${remoteRel}: inizializzata (${entries.length} voci).`);
+      }
+      continue;
+    }
+
+    if (prev.hash === hash) continue;
+
+    const prevSet = new Set(prev.entries);
+    const currSet = new Set(entries);
+    const added = entries.filter(item => !prevSet.has(item));
+    const removed = prev.entries.filter(item => !currSet.has(item));
+
+    state.whitelists[key] = { hash, entries, updatedAt: Date.now() };
+    saveState();
+
+    if (added.length || removed.length) {
+      events.push({
+        type: EVENT_TYPES.WHITELIST_UPDATE,
+        file: remoteRel,
+        added,
+        removed,
+        total: entries.length,
+        timestamp: new Date()
+      });
+      if (DEBUG) {
+        console.log(`[DEBUG] Whitelist ${remoteRel}: aggiunti=${added.length}, rimossi=${removed.length}`);
+      }
+    }
+  }
+  return events;
 }
 
 let channelRef = null;
@@ -328,6 +418,21 @@ async function tick() {
         console.log('[DEBUG] Bootstrap completato: i log precedenti sono stati ignorati.');
       }
     }
+
+    if (WHITELIST_FILES.length) {
+      const whitelistEvents = await processWhitelistFiles(ftpClient);
+      for (const evt of whitelistEvents) {
+        if (DRY_RUN) {
+          console.log(`[DRY] ${evt.type}:`, JSON.stringify(evt));
+        } else if (channelRef) {
+          try {
+            await channelRef.send({ embeds: [toEmbed(evt)] });
+          } catch (err) {
+            console.error('Discord send failed:', err.message);
+          }
+        }
+      }
+    }
   } catch (err) {
     console.error('Tick error:', err.message);
     if (DEBUG) {
@@ -382,3 +487,4 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+

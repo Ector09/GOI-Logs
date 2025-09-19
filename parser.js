@@ -122,10 +122,12 @@ function parseAdminActor(line) {
 
 function parseConnectDisconnect(line) {
   // Flexible patterns: "Player John connected", "John has been disconnected", "(Connected) John"
-  let m = line.match(/\bPlayer\s+['\"]?(.+?)['\"]?\s+connected\b/i) ||
-          line.match(/\b(['\"]?[^'\"]]+['\"]?)\s+has\s+connected\b/i) ||
-          line.match(/\bjoined\s+the\s+game:\s*(['\"]?[^'\"]]+['\"]?)/i) ||
-          line.match(/\bPlayer\s*#\d+\s+(.+?)\s+connected\b/i);
+  let m =
+    line.match(/^\s*Player\s+(.+?)\s+\(id=.*?\)\s+has\s+connected\.?\s*$/i) ||
+    line.match(/^\s*Player\s+['\"]?(.+?)['\"]?\s+connected\.?\s*$/i) ||
+    line.match(/^\s*['\"]?([^'\"]]+)['\"]?\s+has\s+connected\.?\s*$/i) ||
+    line.match(/\bjoined\s+the\s+game\s*:?\s*['\"]?([^'\"]]+)['\"]?/i) ||
+    line.match(/\bPlayer\s*#\d+\s+(.+?)\s+connected\b/i);
   if (m) {
     return {
       type: EVENT_TYPES.CONNECT,
@@ -136,10 +138,11 @@ function parseConnectDisconnect(line) {
     };
   }
 
-  m = line.match(/\bPlayer\s+['\"]?(.+?)['\"]?\s+disconnected\b/i) ||
-      line.match(/\b(['\"]?[^'\"]]+['\"]?)\s+has\s+been\s+disconnected\b/i) ||
-      line.match(/\bleft\s+the\s+game:\s*(['\"]?[^'\"]]+['\"]?)/i) ||
-      line.match(/\bPlayer\s*#\d+\s+(.+?)\s+disconnected\b/i);
+  m =
+    line.match(/^\s*Player\s+['\"]?(.+?)['\"]?\s+disconnected\.?\s*$/i) ||
+    line.match(/^\s*['\"]?([^'\"]]+)['\"]?\s+has\s+(?:been\s+)?disconnected\.?\s*$/i) ||
+    line.match(/['\"]?([^'\"]]+)['\"]?\s+left\s+the\s+(?:game|server)\b/i) ||
+    line.match(/\bPlayer\s*#\d+\s+(.+?)\s+disconnected\b/i);
   if (m) {
     return {
       type: EVENT_TYPES.DISCONNECT,
@@ -157,7 +160,7 @@ function parseKillDeath(line) {
   let m = line.match(/\b(.+?)\s+killed\s+(.+?)\b/i) || line.match(/\b(.+?)\s+was\s+killed\s+by\s+(.+?)\b/i);
   if (m) {
     // If pattern is "Victim was killed by Killer", swap
-    const isPassive = /was\s+killed\s+by/i.test(line);
+    const isPassive = /was\\s+killed\\s+by/i.test(line) || /\\bkilled\\s+by\\b/i.test(line);
     const a = clean(m[1]);
     const b = clean(m[2]);
     const killer = sanitizePlayer(isPassive ? b : a);
@@ -205,8 +208,9 @@ function parseChat(line) {
   // Examples:
   // "(Direct) John: hello"
   // "Chat: (Global) John: \"hello\""
-  const m = line.match(/\((Direct|Vehicle|Global|Side|Group|Admin)\)\s+([^:]+):\s+"?(.+?)"?$/i) ||
-            line.match(/\bChat:\s*\(([^)]+)\)\s*([^:]+):\s+"?(.+?)"?$/i);
+  const m = line.match(/\((Direct|Vehicle|Global|Side|Group|Admin)\)\s+([^:]+):\s+"?(.+?)"?\s*$/i) ||
+            line.match(/\bChat:\s*\(([^)]+)\)\s*([^:]+):\s+"?(.+?)"?\s*$/i) ||
+            line.match(/^\s*Chat:\s*([^:]+):\s*([^:]+):\s+"?(.+?)"?\s*$/i);
   if (m) {
     const channel = clean(m[1]);
     const player = sanitizePlayer(m[2]);
@@ -402,3 +406,4 @@ module.exports = {
   EVENT_TYPES,
   parseLine
 };
+

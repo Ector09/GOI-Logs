@@ -13,7 +13,7 @@ const FTP_USER = process.env.FTP_USER;
 const FTP_PASS = process.env.FTP_PASS;
 const FTP_PATH = process.env.FTP_PATH || '/';
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 60000);
-const FILE_PATTERNS = (process.env.FILE_PATTERNS || 'adminLog.xml,latest.log,*.rpt')
+const FILE_PATTERNS = (process.env.FILE_PATTERNS || 'adminLog.xml,latest.log,*.rpt,server.log,script_*.log')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
@@ -258,8 +258,12 @@ async function tick() {
           saveState();
           continue;
         }
-        fileState = state.files[key] = { offset: 0, updatedAt: Date.now() };
+        state.files[key] = { offset: f.size, updatedAt: Date.now(), bootstrapIgnored: true };
+        if (DEBUG) {
+          console.log(`[DEBUG] ${remoteRel}: nuovo file rilevato, salto contenuto iniziale (${f.size} byte).`);
+        }
         saveState();
+        continue;
       }
       const last = fileState.offset || 0;
       // Handle rotation: if smaller than last, reset

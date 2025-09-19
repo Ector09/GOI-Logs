@@ -22,13 +22,11 @@ function clean(s) {
 function sanitizePlayer(name) {
   const value = clean(name);
   if (!value) return undefined;
-  let result = value
+  const result = String(value)
     .replace(/^['\"]+|['\"]+$/g, '')
-    .replace(/\b\(DEAD\)\b/gi, '')
-    .replace(/\b\(ALIVE\)\b/gi, '')
+    .replace(/\b\((?:DEAD|ALIVE)\)\b/gi, '')
     .replace(/\(id=[^)]+\)/gi, '')
-    .replace(/\bID=\d+\b/gi, '')
-    .replace(/\bcharID=\d+\b/gi, '')
+    .replace(/\b(?:id|charID|playerID)=\d+\b/gi, '')
     .replace(/\(dpnid=[^)]+\)/gi, '')
     .replace(/\bSteamID\s*=\s*\d+/gi, '')
     .replace(/\bidentity:[^,]+/gi, '')
@@ -37,11 +35,11 @@ function sanitizePlayer(name) {
     .replace(/\(pos=<[^>]+>\)/gi, '')
     .replace(/\s+(?:has|was)\s+(?:been\s+)?(?:connected|disconnected|kicked|banned).*/i, '')
     .replace(/\s{2,}/g, ' ')
-    .replace(/^[-–—\s]+/, '')
+    .replace(/^[\s\-\u2013\u2014\"']+/, '')
     .trim();
-  if (!result) return undefined;
-  return result;
+  return result || undefined;
 }
+
 
 function stripTimestampPrefix(line) {
   if (!line) return '';

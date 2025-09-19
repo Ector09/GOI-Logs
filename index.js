@@ -22,6 +22,7 @@ const FILE_PATTERNS = (process.env.FILE_PATTERNS || 'adminLog.xml,latest.log,*.r
 const DRY_RUN = String(process.env.DRY_RUN || 'false').toLowerCase() === 'true';
 const DEBUG = String(process.env.DEBUG || 'false').toLowerCase() === 'true';
 const INCLUDE_IP = String(process.env.INCLUDE_IP || 'false').toLowerCase() === 'true';
+const BACKFILL_ON_BOOT = String(process.env.BACKFILL_ON_BOOT || 'false').toLowerCase() === 'true';
 const WHITELIST_FILES = (process.env.WHITELIST_FILES || '')
   .split(',')
   .map(s => s.trim())
@@ -340,20 +341,19 @@ async function tick() {
       }
       let fileState = state.files[key];
       if (!fileState) {
-        if (!state.bootstrapped) {
-          state.files[key] = { offset: f.size, updatedAt: Date.now() };
+        if (!state.bootstrapped && !BACKFILL_ON_BOOT) {
+          state.files[key] = { offset: f.size, updatedAt: Date.now(), bootstrapIgnored: true };
           if (DEBUG) {
             console.log(`[DEBUG] ${remoteRel}: primo avvio, salto ${f.size} byte.`);
           }
           saveState();
           continue;
         }
-        state.files[key] = { offset: f.size, updatedAt: Date.now(), bootstrapIgnored: true };
+        fileState = state.files[key] = { offset: 0, updatedAt: Date.now() };
         if (DEBUG) {
-          console.log(`[DEBUG] ${remoteRel}: nuovo file rilevato, salto contenuto iniziale (${f.size} byte).`);
+          console.log(`[DEBUG] ${remoteRel}: nuovo file processato dall'inizio.`);
         }
         saveState();
-        continue;
       }
       const last = fileState.offset || 0;
       // Handle rotation: if smaller than last, reset

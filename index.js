@@ -181,6 +181,34 @@ function toEmbed(evt) {
         { name: 'Parte', value: String(evt.part || 1), inline: true }
       );
       break;
+    case EVENT_TYPES.OBJECT:
+      embed.setTitle('Oggetto piazzato');
+      embed.addFields(
+        { name: 'Player', value: evt.player || 'Sconosciuto', inline: true },
+        { name: 'Oggetto', value: evt.object || 'N/D', inline: true }
+      );
+      if (evt.location) embed.addFields({ name: 'Coordinate', value: evt.location, inline: true });
+      break;
+    case EVENT_TYPES.BASE_ACTION:
+      embed.setTitle('Azione base');
+      embed.addFields(
+        { name: 'Player', value: evt.player || 'Sconosciuto', inline: true },
+        { name: 'Azione', value: pretty(evt.action) || 'N/D', inline: true }
+      );
+      if (evt.detail) embed.addFields({ name: 'Dettaglio', value: evt.detail });
+      if (evt.location) embed.addFields({ name: 'Coordinate', value: evt.location, inline: true });
+      break;
+    case EVENT_TYPES.HIT:
+      embed.setTitle('Hit log');
+      embed.addFields(
+        { name: 'Attaccante', value: evt.attacker || 'Sconosciuto', inline: true },
+        { name: 'Vittima', value: evt.victim || 'Sconosciuto', inline: true },
+        { name: 'Danno', value: evt.damage != null ? `${evt.damage} (${evt.damageType || 'N/D'})` : 'N/D', inline: true }
+      );
+      if (evt.weapon) embed.addFields({ name: 'Arma', value: evt.weapon, inline: true });
+      if (evt.bodyPart) embed.addFields({ name: 'Parte colpita', value: evt.bodyPart, inline: true });
+      if (evt.victimHp != null) embed.addFields({ name: 'HP vittima', value: String(evt.victimHp), inline: true });
+      break;
     case EVENT_TYPES.WHITELIST_UPDATE:
       embed.setTitle('Aggiornamento whitelist');
       embed.addFields({ name: 'File', value: evt.file || 'N/D', inline: true });

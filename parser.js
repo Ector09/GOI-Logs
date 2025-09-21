@@ -11,7 +11,10 @@ const EVENT_TYPES = {
   ADMIN: 'admin',
   POSITION: 'position',
   PLAYER_COUNT: 'player_count',
-  PLAYER_LIST_HEADER: 'player_list_header'
+  PLAYER_LIST_HEADER: 'player_list_header',
+  OBJECT: 'object',
+  BASE_ACTION: 'base_action',
+  HIT: 'hit'
 };
 
 function clean(s) {
@@ -34,6 +37,7 @@ function sanitizePlayer(name) {
     .replace(/\bpos\s*=\s*<[^>]+>/gi, '')
     .replace(/\(pos=<[^>]+>\)/gi, '')
     .replace(/\s+(?:has|was)\s+(?:been\s+)?(?:connected|disconnected|kicked|banned).*/i, '')
+    .replace(/\[HP:\s*[^\]]+\]/gi, '')
     .replace(/\s{2,}/g, ' ')
     .replace(/^[\s\-\u2013\u2014\"']+/, '')
     .trim();
@@ -172,10 +176,11 @@ function parseKillDeath(line) {
     const b = clean(m[2]);
     const killer = sanitizePlayer(isPassive ? b : a);
     const victim = sanitizePlayer(isPassive ? a : b);
-    const weapon = parseWeapon(line);
+    const weapon = parseWeapon(stripped) || parseWeapon(line);
     const location = parseLocation(line);
-    const distance = parseDistance(line);
-    const hitZone = parseHitZone(line);
+    const distanceMatch = stripped.match(/from\s+([0-9.]+)\s+meters?/i);
+    const distance = distanceMatch ? Number(distanceMatch[1]) : parseDistance(line);
+    const hitZone = parseHitZone(stripped) || parseHitZone(line);
     const steamIds = (line.match(/\d{17}/g) || []).map(clean);
     const killerSteamId = isPassive ? steamIds[1] : steamIds[0];
     const victimSteamId = isPassive ? steamIds[0] : steamIds[1];
@@ -353,7 +358,9 @@ function parseScriptPosition(line) {
 
 function parsePlayerCount(line) {
   const stripped = stripTimestampPrefix(line);
-  const m = stripped.match(/Total Players\s*:\s*(\d+)/i) || stripped.match(/Players Online\s*[:=]\s*(\d+)/i);
+  const m = stripped.match(/Total Players\s*:\s*(\d+)/i) ||
+    stripped.match(/Players Online\s*[:=]\s*(\d+)/i) ||
+    stripped.match(/#####\s*PlayerList log:\s*(\d+)\s*players/i);
   if (!m) return null;
   return {
     type: EVENT_TYPES.PLAYER_COUNT,
@@ -369,6 +376,58 @@ function parsePlayerListHeader(line) {
     type: EVENT_TYPES.PLAYER_LIST_HEADER,
     snapshot: clean(m[1]),
     part: Number(m[2])
+  };
+}
+
+function parseObjectPlacement(line) {
+  const stripped = stripTimestampPrefix(line);
+  const match = stripped.match(/Player\s+"(.+?)".*pos=<([^>]+)>.*\splaced\s+(.+)/i);
+  if (!match) return null;
+  const player = sanitizePlayer(match[1]);
+  const location = clean(match[2]);
+  const object = clean(match[3]);
+  return {
+    type: EVENT_TYPES.OBJECT,
+    player,
+    object,
+    location
+  };
+}
+
+function parseBaseAction(line) {
+  const stripped = stripTimestampPrefix(line);
+  const match = stripped.match(/Player\s+"(.+?)".*pos=<([^>]+)>\s*((?:Built|Dismantled|Destroyed)[^$]*)/i);
+  if (!match) return null;
+  const player = sanitizePlayer(match[1]);
+  const location = clean(match[2]);
+  const detail = clean(match[3]);
+  if (!detail) return null;
+  const actionWord = (detail.match(/^(Built|Dismantled|Destroyed)/i) || [])[1];
+  return {
+    type: EVENT_TYPES.BASE_ACTION,
+    player,
+    action: clean(actionWord) || 'azione',
+    detail,
+    location
+  };
+}
+
+function parseHit(line) {
+  const stripped = stripTimestampPrefix(line);
+  const match = stripped.match(/Player\s+"(.+?)"\s*\(.*?pos=<([^>]+)>\)\s*\[HP:\s*([0-9.]+)\]\s+hit\s+by\s+Player\s+"(.+?)"\s*\(.*?pos=<([^>]+)>\)\s+into\s+([^\s]+)\([^)]*\)\s+for\s+([0-9.]+)\s+damage\s+\(([^)]+)\)(?:\s+with\s+(.+))?/i);
+  if (!match) return null;
+  const [, victim, victimPos, victimHp, attacker, attackerPos, part, damage, damageType, weaponRaw] = match;
+  return {
+    type: EVENT_TYPES.HIT,
+    victim: sanitizePlayer(victim),
+    victimPosition: clean(victimPos),
+    victimHp: Number(victimHp),
+    attacker: sanitizePlayer(attacker),
+    attackerPosition: clean(attackerPos),
+    bodyPart: clean(part),
+    damage: Number(damage),
+    damageType: clean(damageType),
+    weapon: clean(weaponRaw)
   };
 }
 
@@ -399,6 +458,9 @@ function parseLine(logType, line) {
   // Try patterns in order of specificity
   const parsers = [
     parseKillDeath,
+    parseHit,
+    parseBaseAction,
+    parseObjectPlacement,
     parseScriptPosition,
     parsePosition,
     parsePlayerCount,
